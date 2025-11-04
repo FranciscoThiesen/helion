@@ -113,8 +113,10 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
             f"Stage 1: Low-fidelity exploration ({self.n_low} configs × {self.fid_low} reps)"
         )
 
-        # Generate random configurations
-        candidates = list(self.config_gen.random_population_flat(self.n_low))
+        # FIX: Generate TRULY random configurations (no default bias!)
+        # random_population_flat() always includes default as first config
+        # For MFBO, we want pure random exploration to avoid GP bias
+        candidates = [self.config_gen.random_flat() for _ in range(self.n_low)]
         members = [self.make_unbenchmarked(flat) for flat in candidates]
 
         # Benchmark at low fidelity
@@ -142,6 +144,15 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
             f"Stage 1 complete: best={best.perf:.4f}ms, {len(self.evaluated_low)} valid configs"
         )
 
+        # DEBUG: Show top configs to understand what GP learned
+        top_low = sorted(self.evaluated_low, key=lambda m: m.perf)[:5]
+        self.log("Top 5 low-fidelity configs:")
+        for i, m in enumerate(top_low):
+            config = self.config_gen.unflatten(m.flat_values)
+            block_sizes = config.config.get('block_sizes', '?')
+            num_warps = config.config.get('num_warps', '?')
+            self.log(f"  #{i+1}: {m.perf:.4f}ms - block_sizes={block_sizes}, num_warps={num_warps}")
+
     def _stage_medium_fidelity(self) -> None:
         """Stage 2: Medium-fidelity validation (BO-guided selection)."""
         if not self.evaluated_low:
@@ -151,10 +162,23 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
             f"Stage 2: Medium-fidelity validation ({self.n_medium} configs × {self.fid_medium} reps)"
         )
 
-        # Generate candidate pool and select by acquisition function
-        candidates = self._select_by_acquisition(
-            self.n_medium, candidate_pool_size=min(1000, self.n_low * 5)
+        # FIX: Mix direct promotion from low-fid with acquisition-based selection
+        # Problem: Pure acquisition from random pool can miss good low-fid configs!
+        # Strategy: 50% top low-fid configs + 50% acquisition-based
+        n_promote_direct = self.n_medium // 2
+        n_from_acquisition = self.n_medium - n_promote_direct
+
+        # Direct promotion: Take top performers from low-fidelity
+        sorted_low = sorted(self.evaluated_low, key=lambda m: m.perf)
+        direct_promote = [m.flat_values for m in sorted_low[:n_promote_direct]]
+
+        # Acquisition-based: Use GP to find promising configs from random pool
+        candidates_acq = self._select_by_acquisition(
+            n_from_acquisition, candidate_pool_size=max(2000, self.n_low * 2)
         )
+
+        # Combine both strategies
+        candidates = direct_promote + candidates_acq
         members = [self.make_unbenchmarked(flat) for flat in candidates]
 
         # Benchmark at medium fidelity
@@ -182,6 +206,14 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
             f"Stage 2 complete: best={best.perf:.4f}ms, {len(self.evaluated_medium)} valid configs"
         )
 
+        # DEBUG: Show top medium-fidelity configs
+        top_med = sorted(self.evaluated_medium, key=lambda m: m.perf)[:3]
+        self.log("Top 3 medium-fidelity configs:")
+        for i, m in enumerate(top_med):
+            config = self.config_gen.unflatten(m.flat_values)
+            block_sizes = config.config.get('block_sizes', '?')
+            self.log(f"  #{i+1}: {m.perf:.4f}ms - block_sizes={block_sizes}")
+
     def _stage_high_fidelity(self) -> None:
         """Stage 3: High-fidelity validation (BO-guided with multi-fidelity GP)."""
         if not self.evaluated_medium:
@@ -196,12 +228,24 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
             f"Stage 3: High-fidelity validation ({self.n_high} configs × {self.fid_high} reps)"
         )
 
-        # Select best candidates using multi-fidelity GP
-        candidates = self._select_by_acquisition(
-            self.n_high,
-            candidate_pool_size=min(500, len(source) * 3),
+        # FIX: Mix direct promotion from medium-fid with acquisition-based selection
+        # Same strategy as medium stage: 50% direct + 50% acquisition
+        n_promote_direct = self.n_high // 2
+        n_from_acquisition = self.n_high - n_promote_direct
+
+        # Direct promotion: Take top performers from previous stage (medium or low)
+        sorted_source = sorted(source, key=lambda m: m.perf)
+        direct_promote = [m.flat_values for m in sorted_source[:n_promote_direct]]
+
+        # Acquisition-based: Use multi-fidelity GP to find promising configs
+        candidates_acq = self._select_by_acquisition(
+            n_from_acquisition,
+            candidate_pool_size=max(1000, len(source) * 2),
             use_multifidelity=True,
         )
+
+        # Combine both strategies
+        candidates = direct_promote + candidates_acq
         members = [self.make_unbenchmarked(flat) for flat in candidates]
 
         # Benchmark at high fidelity
@@ -221,6 +265,14 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
         self.log(
             f"Stage 3 complete: best={best.perf:.4f}ms, {len(self.evaluated_high)} valid configs"
         )
+
+        # DEBUG: Show top high-fidelity configs
+        top_high = sorted(self.evaluated_high, key=lambda m: m.perf)[:3]
+        self.log("Top 3 high-fidelity configs:")
+        for i, m in enumerate(top_high):
+            config = self.config_gen.unflatten(m.flat_values)
+            block_sizes = config.config.get('block_sizes', '?')
+            self.log(f"  #{i+1}: {m.perf:.4f}ms - block_sizes={block_sizes}")
 
     def _stage_ultra_fidelity(self) -> None:
         """Stage 4: Ultra-high fidelity final comparison."""
@@ -325,10 +377,15 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
         Returns:
             List of selected flat configurations.
         """
-        # Generate candidate pool
-        candidate_pool = list(
-            self.config_gen.random_population_flat(candidate_pool_size)
-        )
+        # FIX 1: Reserve 15% for pure random exploration (diversity sampling)
+        # Middle ground: enough diversity to escape local optima, but not so much we ignore the GP
+        n_random = max(1, int(n_select * 0.15))
+        n_from_acquisition = n_select - n_random
+
+        # Generate candidate pool (truly random, no default bias)
+        candidate_pool = [
+            self.config_gen.random_flat() for _ in range(candidate_pool_size)
+        ]
         X_candidates = np.array([self.encoder.encode(flat) for flat in candidate_pool])
 
         # Get GP predictions
@@ -342,14 +399,23 @@ class MultiFidelityBayesianSearch(PopulationBasedSearch):
         # Compute acquisition scores
         best_so_far = self.gp.get_best_observed()
         if self.acquisition_fn == "ei":
-            scores = expected_improvement(mu, sigma, best_so_far)
+            # FIX 2: Balanced exploration parameter (was 0.01, tried 0.15, now 0.12)
+            # Middle ground: more exploration than original, but not too much
+            scores = expected_improvement(mu, sigma, best_so_far, xi=0.12)
         else:
             # UCB (lower is better for minimization)
             from .acquisition import upper_confidence_bound
 
-            lcb = upper_confidence_bound(mu, sigma, beta=2.0)
+            # FIX 2: Balanced exploration parameter (was 2.0, tried 4.0, now 3.5)
+            # Middle ground: more exploration via uncertainty bonus, but not excessive
+            lcb = upper_confidence_bound(mu, sigma, beta=3.5)
             scores = -lcb  # Negate so higher scores are better
 
-        # Select top N
-        top_indices = np.argsort(scores)[-n_select:][::-1]
-        return [candidate_pool[i] for i in top_indices]
+        # Select top N from acquisition + random diversity
+        top_indices = np.argsort(scores)[-n_from_acquisition:][::-1]
+        selected_from_acquisition = [candidate_pool[i] for i in top_indices]
+
+        # FIX 3: Add pure random samples for diversity
+        random_samples = list(self.config_gen.random_population_flat(n_random))
+
+        return selected_from_acquisition + random_samples

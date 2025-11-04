@@ -20,6 +20,9 @@ from .local_cache import StrictLocalAutotuneCache as StrictLocalAutotuneCache
 from .multifidelity_bo_search import (
     MultiFidelityBayesianSearch as MultiFidelityBayesianSearch,
 )
+from .multifidelity_rf_search import (
+    MultiFidelityRandomForestSearch as MultiFidelityRandomForestSearch,
+)
 from .pattern_search import PatternSearch as PatternSearch
 from .random_search import RandomSearch as RandomSearch
 
@@ -27,6 +30,7 @@ search_algorithms = {
     "DifferentialEvolutionSearch": DifferentialEvolutionSearch,
     "FiniteSearch": FiniteSearch,
     "MultiFidelityBayesianSearch": MultiFidelityBayesianSearch,
+    "MultiFidelityRandomForestSearch": MultiFidelityRandomForestSearch,
     "PatternSearch": PatternSearch,
     "RandomSearch": RandomSearch,
 }

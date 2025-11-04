@@ -193,14 +193,18 @@ def run_full_analysis(
             "MultiFidelityBO",
             MultiFidelityBayesianSearch,
             {
-                # Target: ~1000 configs, ~60s runtime (5× speedup vs PatternSearch's 290s)
-                # PatternSearch uses 50 reps by default, so match that for final validation
-                "n_low_fidelity": 600,     # Was 150 - massive exploration at low cost (5 reps)
-                "n_medium_fidelity": 300,  # Was 50  - extensive validation (15 reps)
-                "n_high_fidelity": 80,     # Was 20  - thorough refinement (50 reps)
-                "n_ultra_fidelity": 20,    # Was 5   - final evaluation (50 reps, NOT 500!)
-                "fidelity_ultra": 50,      # Override default 500 to match PatternSearch!
-                # This saves 10× time per ultra config while matching PatternSearch validation
+                # Scenario 3: MFBO with EQUAL TIME BUDGET as PatternSearch (~260s)
+                # Question: Can MFBO match PatternSearch quality with SAME time?
+                # Previous run: 1200/900/600/100 = 179s (need +81s more!)
+                # Strategy: Increase all stages to fully utilize PatternSearch's time budget
+                "n_low_fidelity": 1500,    # +300 from 1200 (~+10s)
+                "n_medium_fidelity": 1200, # +300 from 900 (~+20s)
+                "n_high_fidelity": 900,    # +300 from 600 (~+35s)
+                "n_ultra_fidelity": 150,   # +50 from 100 (~+16s)
+                "fidelity_low": 10,        # Keep 10 reps for good correlation
+                "fidelity_ultra": 50,      # Keep 50 reps to match PatternSearch
+                # Total: ~3750 configs, targeting ~260s runtime (matching PatternSearch!)
+                # Maximum exploration + refinement with equal time!
             },
         ),
     ]

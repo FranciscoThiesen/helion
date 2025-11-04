@@ -19,12 +19,13 @@ class MultiFidelityGP:
     with the low-fidelity model informing the high-fidelity predictions.
     """
 
-    def __init__(self, noise_level: float = 1e-6) -> None:
+    def __init__(self, noise_level: float = 1e-3) -> None:
         """
         Initialize the multi-fidelity GP model.
 
         Args:
             noise_level: Regularization parameter for numerical stability.
+                        Increased from 1e-6 to 1e-3 to account for benchmark noise.
         """
         self.noise_level = noise_level
         # Separate GP for each fidelity level
@@ -35,14 +36,14 @@ class MultiFidelityGP:
             kernel=kernel,
             alpha=noise_level,
             normalize_y=True,
-            n_restarts_optimizer=2,
+            n_restarts_optimizer=5,  # Increased from 2 to 5 for better hyperparameter search
             random_state=42,
         )
         self.gp_high = GaussianProcessRegressor(
             kernel=kernel,
             alpha=noise_level,
             normalize_y=True,
-            n_restarts_optimizer=2,
+            n_restarts_optimizer=5,  # Increased from 2 to 5 for better hyperparameter search
             random_state=42,
         )
 
