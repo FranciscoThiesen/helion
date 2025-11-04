@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Unified convergence analysis script for GPU machines.
-Runs both convergence comparison and best configuration analysis.
+Real GPU convergence analysis script.
+Runs convergence comparison using actual GPU kernels and real autotuner search classes.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import time
 from pathlib import Path
@@ -15,7 +14,7 @@ from typing import Any
 
 import matplotlib
 import matplotlib.pyplot as plt
-import numpy as np
+import torch
 
 # Use non-interactive backend for headless servers
 matplotlib.use("Agg")
@@ -23,283 +22,223 @@ matplotlib.use("Agg")
 # Add helion to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helion.autotuner.config_fragment import BlockSizeFragment
-from helion.autotuner.config_fragment import EnumFragment
-from helion.autotuner.config_fragment import NumWarpsFragment
-from helion.autotuner.config_spec import ConfigSpec
-from helion.autotuner.multifidelity_bo_search import MultiFidelityBOSearch
-from helion.autotuner.pattern_search import PatternSearch
-from helion.autotuner.random_search import RandomSearch
+import helion
+from helion.autotuner import MultiFidelityBayesianSearch
+from helion.autotuner import PatternSearch
+from helion.autotuner import RandomSearch
+import helion.language as hl
 
 
-class SyntheticKernelBenchmark:
+# Define a simple matmul kernel for benchmarking
+@helion.kernel(
+    static_shapes=True,
+    autotune_config_overrides={
+        "range_unroll_factors": [0, 0],
+        "range_num_stages": [0, 0],
+    },
+)
+def matmul_benchmark(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """
-    Simulates a realistic kernel performance landscape.
+    Simple matrix multiplication kernel for benchmarking autotuners.
 
-    This creates a challenging optimization problem similar to real GPU kernels:
-    - Non-convex with multiple local minima
-    - Noisy measurements (noise decreases with higher fidelity)
-    - Power-of-2 parameter preferences
-    - Realistic performance range (0.5-10ms)
+    Args:
+        x: Left matrix of shape [m, k]
+        y: Right matrix of shape [k, n]
+
+    Returns:
+        Result matrix of shape [m, n]
     """
+    m, k = x.size()
+    k2, n = y.size()
+    assert k == k2, f"size mismatch {k} != {k2}"
 
-    def __init__(self, seed: int = 42) -> None:
-        self.rng = np.random.default_rng(seed)
-        self.eval_count = 0
-        self.eval_history: list[tuple[dict[str, Any], float, int]] = []
-
-        # Global optimum (what we want algorithms to find)
-        self.global_optimum = {
-            "BLOCK_M": 128,
-            "BLOCK_N": 128,
-            "BLOCK_K": 64,
-            "num_warps": 8,
-            "num_stages": 3,
-        }
-
-        # Local optima (suboptimal but decent - traps for naive searchers)
-        self.local_optima = [
-            {
-                "BLOCK_M": 64,
-                "BLOCK_N": 64,
-                "BLOCK_K": 32,
-                "num_warps": 4,
-                "num_stages": 2,
-            },
-            {
-                "BLOCK_M": 256,
-                "BLOCK_N": 128,
-                "BLOCK_K": 64,
-                "num_warps": 16,
-                "num_stages": 4,
-            },
-        ]
-
-    def __call__(self, config: dict[str, Any], fidelity: int = 50) -> float:
-        """Evaluate a configuration with given fidelity (number of reps)."""
-        self.eval_count += 1
-
-        # Extract config values
-        block_m = config.get("BLOCK_M", 64)
-        block_n = config.get("BLOCK_N", 64)
-        block_k = config.get("BLOCK_K", 32)
-        num_warps = config.get("num_warps", 4)
-        num_stages = config.get("num_stages", 3)
-
-        # Base performance: quadratic bowl around global optimum
-        perf = (
-            1.5  # baseline performance
-            + 0.001 * (block_m - self.global_optimum["BLOCK_M"]) ** 2
-            + 0.001 * (block_n - self.global_optimum["BLOCK_N"]) ** 2
-            + 0.002 * (block_k - self.global_optimum["BLOCK_K"]) ** 2
-            + 0.12 * (num_warps - self.global_optimum["num_warps"]) ** 2
-            + 0.2 * (num_stages - self.global_optimum["num_stages"]) ** 2
-        )
-
-        # Add local optima attractions (creates multiple valleys)
-        for local_opt in self.local_optima:
-            dist_sq = (
-                0.0008 * (block_m - local_opt["BLOCK_M"]) ** 2
-                + 0.0008 * (block_n - local_opt["BLOCK_N"]) ** 2
-                + 0.0015 * (block_k - local_opt["BLOCK_K"]) ** 2
-                + 0.08 * (num_warps - local_opt["num_warps"]) ** 2
-                + 0.15 * (num_stages - local_opt["num_stages"]) ** 2
-            )
-            # Gaussian attraction toward local optimum
-            perf -= 0.6 * math.exp(-dist_sq / 2.0)
-
-        # Add non-smooth effects (realistic for GPU kernels)
-        # GPUs prefer certain block size alignments
-        if block_m % 128 != 0:
-            perf += 0.25
-        if block_n % 128 != 0:
-            perf += 0.25
-
-        # Penalize bad warp/stage combinations
-        if num_warps > num_stages * 4:
-            perf += 0.4
-
-        # Add measurement noise (inversely proportional to fidelity)
-        # Higher fidelity = more reps = less noise
-        noise_std = 0.15 / math.sqrt(fidelity)
-        noise = self.rng.normal(0, noise_std)
-        perf_noisy = max(0.1, perf + noise)
-
-        self.eval_history.append((config.copy(), perf_noisy, fidelity))
-        return perf_noisy
-
-    def get_best_so_far(self) -> list[float]:
-        """Return best performance observed at each evaluation."""
-        best_so_far = []
-        best_val = float("inf")
-        for _, perf, _ in self.eval_history:
-            best_val = min(best_val, perf)
-            best_so_far.append(best_val)
-        return best_so_far
-
-
-def create_test_config_spec() -> ConfigSpec:
-    """Create a realistic config spec for matmul-like kernel."""
-    return ConfigSpec(
-        {
-            "BLOCK_M": BlockSizeFragment(32, 256, 128),
-            "BLOCK_N": BlockSizeFragment(32, 256, 128),
-            "BLOCK_K": BlockSizeFragment(16, 128, 64),
-            "num_warps": NumWarpsFragment(2, 16, 8),
-            "num_stages": EnumFragment([2, 3, 4, 5], 3),
-        }
+    out = torch.empty(
+        [m, n], dtype=torch.promote_types(x.dtype, y.dtype), device=x.device
     )
 
+    for tile_m, tile_n in hl.tile([m, n]):
+        acc = hl.zeros([tile_m, tile_n], dtype=torch.float32)
+        for tile_k in hl.tile(k):
+            acc = torch.addmm(acc, x[tile_m, tile_k], y[tile_k, tile_n])
+        out[tile_m, tile_n] = acc
 
-def run_algorithm(
+    return out
+
+
+def run_search_algorithm(
     name: str,
-    SearchClass: type,
-    config_spec: ConfigSpec,
-    seed: int,
-    max_iters: int,
+    search_class: type,
+    bound_kernel: Any,
+    args: tuple,
     verbose: bool = True,
-) -> dict[str, Any] | None:
-    """Run a single autotuning algorithm and collect results."""
+    **search_kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Run a single search algorithm and collect results.
+
+    Args:
+        name: Name of the search algorithm
+        search_class: The search class to instantiate
+        bound_kernel: The bound kernel to tune
+        args: Arguments to pass to the kernel
+        verbose: Whether to print progress
+        **search_kwargs: Additional keyword arguments for the search class
+
+    Returns:
+        Dictionary with results including best config, timing, and evaluation count
+    """
     if verbose:
         print(f"\n{'=' * 70}")
         print(f"Running {name}...")
         print(f"{'=' * 70}\n")
 
-    benchmark = SyntheticKernelBenchmark(seed=seed)
-
-    # Create search instance
-    if name == "MultiFidelityBO":
-        search = SearchClass(
-            config_spec,
-            n_low_fidelity=20,
-            n_medium_fidelity=10,
-            n_high_fidelity=5,
-            n_ultra_fidelity=3,
-        )
-    else:
-        search = SearchClass(config_spec)
-
-    # Mock compiled config object
-    class MockCompiledConfig:
-        pass
-
-    mock_fn = MockCompiledConfig()
-
-    # Override benchmark function to use our mock
-    def mock_benchmark_wrapper(
-        config: object,
-        fn: object,
-        *,
-        fidelity: int = 50,
-        _benchmark: SyntheticKernelBenchmark = benchmark,
-    ) -> float:
-        # Convert config to dict for our mock
-        config_dict = {}
-        for i, (key, _spec) in enumerate(config_spec.items()):
-            config_dict[key] = config[i]  # type: ignore[index]
-        return _benchmark(config_dict, fidelity=fidelity)
-
-    search.benchmark_function = mock_benchmark_wrapper  # type: ignore[method-assign]
-
-    # Run search
     start_time = time.time()
+
     try:
-        best_config = search.search(mock_fn, max_iterations=max_iters)
+        # Create the search instance
+        search = search_class(bound_kernel, args, **search_kwargs)
+
+        # Run autotuning
+        best_config = search.autotune()
+
         elapsed = time.time() - start_time
 
-        # Get best performance
-        best_perf = min(perf for _, perf, _ in benchmark.eval_history)
+        # Get evaluation count from counters
+        total_evals = search.counters.get("total_benchmarks", 0)
 
-        # Get convergence curve
-        convergence = benchmark.get_best_so_far()
-
-        # Convert best_config to dict for display
-        best_config_dict = {}
-        for i, (key, _spec) in enumerate(config_spec.items()):
-            best_config_dict[key] = best_config[i]
+        # Benchmark the best config to get actual performance
+        compiled_fn = bound_kernel.compile_config(best_config)
+        best_perf = search.benchmark_function(best_config, compiled_fn, fidelity=50)
 
         if verbose:
             print(f"\n✓ {name} completed!")
             print(f"  Best performance: {best_perf:.4f} ms")
-            print(f"  Best config: {best_config_dict}")
-            print(f"  Total evaluations: {benchmark.eval_count}")
+            print(f"  Best config: {best_config}")
+            print(f"  Total evaluations: {total_evals}")
             print(f"  Time elapsed: {elapsed:.2f}s")
 
         return {
             "name": name,
+            "best_config": best_config,
             "best_perf": best_perf,
-            "best_config": best_config_dict,
-            "total_evals": benchmark.eval_count,
+            "total_evals": total_evals,
             "elapsed_time": elapsed,
-            "convergence": convergence,
-            "eval_history": benchmark.eval_history,
+            "success": True,
         }
 
     except Exception as e:
+        elapsed = time.time() - start_time
         if verbose:
             print(f"\n✗ {name} failed: {e}")
             import traceback
-
             traceback.print_exc()
-        return None
+
+        return {
+            "name": name,
+            "best_config": None,
+            "best_perf": float("inf"),
+            "total_evals": 0,
+            "elapsed_time": elapsed,
+            "success": False,
+            "error": str(e),
+        }
 
 
-def plot_convergence(
-    results: dict[str, dict], output_path: str, title_suffix: str = ""
-) -> None:
-    """Create convergence plot comparing all algorithms."""
-    plt.figure(figsize=(12, 6))
+def run_full_analysis(
+    m: int = 1024,
+    k: int = 1024,
+    n: int = 1024,
+    dtype: torch.dtype = torch.float16,
+    device: str = "cuda",
+    output_dir: Path = Path("."),
+    verbose: bool = True,
+) -> dict[str, dict]:
+    """
+    Run complete convergence analysis on real GPU kernels.
 
-    colors = {
-        "MultiFidelityBO": "blue",
-        "PatternSearch": "red",
-        "RandomSearch": "green",
-    }
+    Args:
+        m: Number of rows in left matrix
+        k: Number of columns in left matrix / rows in right matrix
+        n: Number of columns in right matrix
+        dtype: Data type for matrices
+        device: Device to run on
+        output_dir: Directory to save results
+        verbose: Whether to print progress
 
-    for name, result in results.items():
-        if result is None:
-            continue
+    Returns:
+        Dictionary mapping algorithm name to results
+    """
+    if verbose:
+        print("=" * 70)
+        print("Real GPU Kernel Convergence Analysis")
+        print("=" * 70)
+        print(f"\nMatrix sizes: [{m}, {k}] @ [{k}, {n}]")
+        print(f"Data type: {dtype}")
+        print(f"Device: {device}")
+        print(f"Output directory: {output_dir}\n")
 
-        convergence = result["convergence"]
-        evals = list(range(1, len(convergence) + 1))
+    # Create test tensors
+    x = torch.randn([m, k], device=device, dtype=dtype)
+    y = torch.randn([k, n], device=device, dtype=dtype)
+    args = (x, y)
 
-        plt.plot(
-            evals,
-            convergence,
-            label=f"{name} (final: {result['best_perf']:.3f}ms, evals: {result['total_evals']})",
-            color=colors.get(name, "gray"),
-            linewidth=2,
-            alpha=0.8,
+    # Bind the kernel
+    bound_kernel = matmul_benchmark.bind(args)
+
+    # Define algorithms to test
+    algorithms = [
+        ("PatternSearch", PatternSearch, {}),
+        ("RandomSearch", RandomSearch, {"count": 1000}),  # Increased to match MFBO budget
+        (
+            "MultiFidelityBO",
+            MultiFidelityBayesianSearch,
+            {
+                # Target: ~1000 configs, ~60s runtime (5× speedup vs PatternSearch's 290s)
+                # PatternSearch uses 50 reps by default, so match that for final validation
+                "n_low_fidelity": 600,     # Was 150 - massive exploration at low cost (5 reps)
+                "n_medium_fidelity": 300,  # Was 50  - extensive validation (15 reps)
+                "n_high_fidelity": 80,     # Was 20  - thorough refinement (50 reps)
+                "n_ultra_fidelity": 20,    # Was 5   - final evaluation (50 reps, NOT 500!)
+                "fidelity_ultra": 50,      # Override default 500 to match PatternSearch!
+                # This saves 10× time per ultra config while matching PatternSearch validation
+            },
+        ),
+    ]
+
+    results = {}
+    for name, SearchClass, kwargs in algorithms:
+        result = run_search_algorithm(
+            name, SearchClass, bound_kernel, args, verbose, **kwargs
         )
+        if result["success"]:
+            results[name] = result
 
-    plt.xlabel("Number of Evaluations", fontsize=12)
-    plt.ylabel("Best Performance (ms, lower is better)", fontsize=12)
-    title = "Convergence Comparison: MFBO vs PatternSearch vs RandomSearch"
-    if title_suffix:
-        title += f" ({title_suffix})"
-    plt.title(title, fontsize=14)
-    plt.legend(fontsize=10)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+    # Print summary
+    if verbose:
+        print_summary(results)
 
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"\n✓ Convergence plot saved to {output_path}")
-    plt.close()
+    # Generate comparison plot if we have results
+    if len(results) >= 2:
+        plot_path = output_dir / "convergence_comparison.png"
+        plot_comparison(results, str(plot_path))
+
+    return results
 
 
-def print_summary(results: dict[str, dict], show_configs: bool = True) -> None:
+def print_summary(results: dict[str, dict]) -> None:
     """Print summary comparison table."""
     print(f"\n{'=' * 70}")
     print("CONVERGENCE ANALYSIS SUMMARY")
     print(f"{'=' * 70}\n")
 
-    # Find baseline (PatternSearch)
-    baseline = results.get("PatternSearch")
-    if not baseline:
-        print("Warning: No baseline (PatternSearch) results available")
+    if not results:
+        print("No results to display")
         return
 
-    print(f"{'Algorithm':<20} {'Best Perf':<15} {'Evaluations':<15} {'Speedup':<15}")
+    # Find baseline (PatternSearch) for speedup calculation
+    baseline = results.get("PatternSearch")
+
+    print(f"{'Algorithm':<25} {'Evaluations':<15} {'Time (s)':<15} {'Speedup':<15}")
     print("-" * 70)
 
     for name in ["PatternSearch", "RandomSearch", "MultiFidelityBO"]:
@@ -307,81 +246,96 @@ def print_summary(results: dict[str, dict], show_configs: bool = True) -> None:
         if not result:
             continue
 
-        speedup = baseline["total_evals"] / result["total_evals"]
+        speedup_str = "N/A"
+        if baseline and baseline["total_evals"] > 0:
+            speedup = baseline["total_evals"] / max(result["total_evals"], 1)
+            speedup_str = f"{speedup:>10.1f}x"
 
         print(
-            f"{name:<20} {result['best_perf']:>10.4f} ms   "
-            f"{result['total_evals']:>10}      {speedup:>10.1f}x"
+            f"{name:<25} {result['total_evals']:>10}      "
+            f"{result['elapsed_time']:>10.2f}      {speedup_str}"
         )
 
-    if show_configs:
-        print(f"\n{'=' * 70}")
-        print("Best Configurations Found:")
-        print(f"{'=' * 70}\n")
+    print(f"\n{'=' * 70}")
+    print("Best Configurations:")
+    print(f"{'=' * 70}\n")
 
-        optimal_config = {
-            "BLOCK_M": 128,
-            "BLOCK_N": 128,
-            "BLOCK_K": 64,
-            "num_warps": 8,
-            "num_stages": 3,
-        }
-
-        for name, result in results.items():
-            if result:
-                config = result["best_config"]
-                # Check if found optimal
-                is_optimal = all(config.get(k) == v for k, v in optimal_config.items())
-                status = " ✓ OPTIMAL" if is_optimal else " (suboptimal)"
-
-                print(f"{name}{status}:")
-                print(f"  {config}")
-                print()
+    for name, result in results.items():
+        if result.get("best_config"):
+            print(f"{name}:")
+            print(f"  {result['best_config']}")
+            print()
 
 
-def run_full_analysis(
-    output_dir: Path, seed: int = 42, max_iters: int = 100, verbose: bool = True
-) -> dict[str, dict]:
-    """Run complete convergence analysis."""
-    if verbose:
-        print("=" * 70)
-        print("Multi-Fidelity Bayesian Optimization - Convergence Analysis")
-        print("=" * 70)
-        print(f"\nOutput directory: {output_dir}")
-        print(f"Random seed: {seed}")
-        print(f"Max iterations: {max_iters}\n")
+def plot_comparison(results: dict[str, dict], output_path: str) -> None:
+    """Create bar plot comparing algorithm performance."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    config_spec = create_test_config_spec()
+    names = list(results.keys())
+    evals = [results[name]["total_evals"] for name in names]
+    times = [results[name]["elapsed_time"] for name in names]
 
-    algorithms = [
-        ("PatternSearch", PatternSearch),
-        ("RandomSearch", RandomSearch),
-        ("MultiFidelityBO", MultiFidelityBOSearch),
-    ]
+    colors = {
+        "MultiFidelityBO": "blue",
+        "PatternSearch": "red",
+        "RandomSearch": "green",
+    }
+    bar_colors = [colors.get(name, "gray") for name in names]
 
-    results = {}
-    for name, SearchClass in algorithms:
-        result = run_algorithm(name, SearchClass, config_spec, seed, max_iters, verbose)
-        if result:
-            results[name] = result
+    # Plot evaluations
+    ax1.bar(names, evals, color=bar_colors, alpha=0.7)
+    ax1.set_ylabel("Number of Evaluations", fontsize=12)
+    ax1.set_title("Total Evaluations Required", fontsize=14)
+    ax1.grid(True, alpha=0.3, axis='y')
 
-    # Generate plots
-    output_dir.mkdir(parents=True, exist_ok=True)
-    plot_path = output_dir / "convergence_comparison.png"
-    plot_convergence(results, str(plot_path))
+    # Plot time
+    ax2.bar(names, times, color=bar_colors, alpha=0.7)
+    ax2.set_ylabel("Time (seconds)", fontsize=12)
+    ax2.set_title("Wall-Clock Time", fontsize=14)
+    ax2.grid(True, alpha=0.3, axis='y')
 
-    # Print summary
-    if verbose:
-        print_summary(results)
-
-    return results
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"\n✓ Comparison plot saved to {output_path}")
+    plt.close()
 
 
-def main() -> None:
+def main() -> int:
     """Main entry point with argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Run convergence analysis for MFBO autotuner",
+        description="Run real GPU convergence analysis for autotuner",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--m",
+        type=int,
+        default=1024,
+        help="Number of rows in left matrix",
+    )
+    parser.add_argument(
+        "--k",
+        type=int,
+        default=1024,
+        help="Shared dimension",
+    )
+    parser.add_argument(
+        "--n",
+        type=int,
+        default=1024,
+        help="Number of columns in right matrix",
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float16",
+        choices=["float16", "float32", "bfloat16"],
+        help="Data type for matrices",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Device to run on",
     )
     parser.add_argument(
         "--output-dir",
@@ -389,20 +343,6 @@ def main() -> None:
         type=Path,
         default=Path("."),
         help="Output directory for plots and results",
-    )
-    parser.add_argument(
-        "--seed",
-        "-s",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility",
-    )
-    parser.add_argument(
-        "--max-iters",
-        "-i",
-        type=int,
-        default=100,
-        help="Maximum iterations for each algorithm",
     )
     parser.add_argument(
         "--quiet",
@@ -413,11 +353,22 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Convert dtype string to torch dtype
+    dtype_map = {
+        "float16": torch.float16,
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+    }
+    dtype = dtype_map[args.dtype]
+
     try:
         results = run_full_analysis(
-            args.output_dir,
-            seed=args.seed,
-            max_iters=args.max_iters,
+            m=args.m,
+            k=args.k,
+            n=args.n,
+            dtype=dtype,
+            device=args.device,
+            output_dir=args.output_dir,
             verbose=not args.quiet,
         )
 
@@ -438,7 +389,6 @@ def main() -> None:
     except Exception as e:
         print(f"\n\nError during analysis: {e}")
         import traceback
-
         traceback.print_exc()
         return 1
 
