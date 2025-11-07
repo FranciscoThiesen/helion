@@ -34,7 +34,7 @@ def plot_convergence(kernel_name):
     }
 
     log_dir = Path('convergence_logs')
-    max_eval_limit = 2000  # Limit X-axis for fair comparison
+    all_max_evals = []
 
     for algo in ['DifferentialEvolution', 'DE-Surrogate', 'PatternSearch']:
         csv_path = log_dir / f"{kernel_name}_{algo}.csv"
@@ -46,18 +46,18 @@ def plot_convergence(kernel_name):
         evals, perfs = parse_csv_convergence(csv_path)
 
         if evals and perfs:
-            # Limit to first max_eval_limit evaluations for fair comparison
-            if len(evals) > max_eval_limit:
-                evals = evals[:max_eval_limit]
-                perfs = perfs[:max_eval_limit]
-
+            all_max_evals.append(max(evals))
             plt.plot(evals, perfs, label=algo, color=colors.get(algo, 'gray'), linewidth=2)
-            print(f"  Added {algo}: {len(evals)} points (displayed), best={min(perfs):.4f}ms")
+            print(f"  Added {algo}: {len(evals)} evals, best={min(perfs):.4f}ms")
+
+    # Set X-axis to show all data with some padding
+    if all_max_evals:
+        max_x = max(all_max_evals)
+        plt.xlim(0, max_x * 1.05)
 
     plt.xlabel('Number of Evaluations', fontsize=12)
     plt.ylabel('Best Performance (ms)', fontsize=12)
     plt.title(f'Convergence Comparison: {kernel_name}', fontsize=14, fontweight='bold')
-    plt.xlim(0, max_eval_limit)
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
