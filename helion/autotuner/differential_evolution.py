@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,8 @@ class DifferentialEvolutionSearch(PopulationBasedSearch):
         max_generations: int = DIFFERENTIAL_EVOLUTION_DEFAULTS.max_generations,
         crossover_rate: float = 0.8,
         immediate_update: bool | None = None,
+        min_improvement_delta: float = 0.001,
+        patience: int = 3,
     ) -> None:
         super().__init__(kernel, args)
         if immediate_update is None:
@@ -39,6 +42,8 @@ class DifferentialEvolutionSearch(PopulationBasedSearch):
         self.max_generations = max_generations
         self.crossover_rate = crossover_rate
         self.immediate_update = immediate_update
+        self.min_improvement_delta = min_improvement_delta
+        self.patience = patience
 
     def mutate(self, x_index: int) -> FlatConfig:
         a, b, c, *_ = [
@@ -101,14 +106,43 @@ class DifferentialEvolutionSearch(PopulationBasedSearch):
         self.log(
             lambda: (
                 f"Starting DifferentialEvolutionSearch with population={self.population_size}, "
-                f"generations={self.max_generations}, crossover_rate={self.crossover_rate}"
+                f"generations={self.max_generations}, crossover_rate={self.crossover_rate}, "
+                f"early_stopping=(delta={self.min_improvement_delta}, patience={self.patience})"
             )
         )
         self.initial_two_generations()
+
+        # Early stopping tracking
+        best_perf_history = [self.best.perf]
+        generations_without_improvement = 0
+
         for i in range(2, self.max_generations):
             self.set_generation(i)
             self.log(f"Generation {i} starting")
             replaced = self.evolve_population()
             self.log(f"Generation {i} complete: replaced={replaced}", self.statistics)
+
+            # Check for convergence
+            current_best = self.best.perf
+            best_perf_history.append(current_best)
+
+            if len(best_perf_history) > self.patience:
+                # Check improvement over last patience generations
+                past_best = best_perf_history[-self.patience - 1]
+
+                if math.isfinite(current_best) and math.isfinite(past_best) and past_best != 0.0:
+                    relative_improvement = abs(current_best / past_best - 1.0)
+
+                    if relative_improvement < self.min_improvement_delta:
+                        generations_without_improvement += 1
+                        if generations_without_improvement >= self.patience:
+                            self.log(
+                                f"Early stopping at generation {i}: "
+                                f"no improvement >{self.min_improvement_delta:.1%} for {self.patience} generations"
+                            )
+                            break
+                    else:
+                        generations_without_improvement = 0
+
         self.rebenchmark_population()
         return self.best.config

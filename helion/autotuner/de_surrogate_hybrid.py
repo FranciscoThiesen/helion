@@ -24,6 +24,7 @@ Date: 2025-11-05
 
 from __future__ import annotations
 
+import math
 import random
 from typing import TYPE_CHECKING
 
@@ -58,6 +59,8 @@ class DESurrogateHybrid(PopulationBasedSearch):
         candidate_ratio: Generate this many× candidates per slot (default: 3)
         refit_frequency: Refit surrogate every N generations (default: 5)
         n_estimators: Number of trees in Random Forest (default: 50)
+        min_improvement_delta: Relative stop threshold (default: 0.001 = 0.1%)
+        patience: Stop if no improvement for this many generations (default: 3)
     """
 
     def __init__(
@@ -71,6 +74,8 @@ class DESurrogateHybrid(PopulationBasedSearch):
         candidate_ratio: int = 3,
         refit_frequency: int = 5,
         n_estimators: int = 50,
+        min_improvement_delta: float = 0.001,
+        patience: int = 3,
     ) -> None:
         super().__init__(kernel, args)
 
@@ -81,6 +86,8 @@ class DESurrogateHybrid(PopulationBasedSearch):
         self.candidate_ratio = candidate_ratio
         self.refit_frequency = refit_frequency
         self.n_estimators = n_estimators
+        self.min_improvement_delta = min_improvement_delta
+        self.patience = patience
 
         # Config encoder for surrogate model
         self.encoder = ConfigEncoder(self.config_gen)
@@ -106,14 +113,41 @@ class DESurrogateHybrid(PopulationBasedSearch):
         self.log(f"Crossover rate: {self.crossover_rate}")
         self.log(f"Surrogate activation: after {self.surrogate_threshold} evals")
         self.log(f"Candidate oversampling: {self.candidate_ratio}× per slot")
+        self.log(f"Early stopping: delta={self.min_improvement_delta}, patience={self.patience}")
         self.log("=" * 70)
 
         # Initialize population
         self._initialize_population()
 
+        # Early stopping tracking
+        best_perf_history = [min(m.perf for m in self.population)]
+        generations_without_improvement = 0
+
         # Evolution loop
         for gen in range(2, self.max_generations + 1):
             self._evolve_generation(gen)
+
+            # Track best performance
+            current_best = min(m.perf for m in self.population)
+            best_perf_history.append(current_best)
+
+            # Check for convergence
+            if len(best_perf_history) > self.patience:
+                past_best = best_perf_history[-self.patience - 1]
+
+                if math.isfinite(current_best) and math.isfinite(past_best) and past_best != 0.0:
+                    relative_improvement = abs(current_best / past_best - 1.0)
+
+                    if relative_improvement < self.min_improvement_delta:
+                        generations_without_improvement += 1
+                        if generations_without_improvement >= self.patience:
+                            self.log(
+                                f"Early stopping at generation {gen}: "
+                                f"no improvement >{self.min_improvement_delta:.1%} for {self.patience} generations"
+                            )
+                            break
+                    else:
+                        generations_without_improvement = 0
 
         # Return best config
         best = min(self.population, key=lambda m: m.perf)
