@@ -338,17 +338,22 @@ class MultiFidelityRandomForestSearch(PopulationBasedSearch):
         # Train Random Forest on evaluated configs
         if use_multifidelity:
             # Multi-fidelity: Train on both low and medium fidelity data
+            # Filter out infinity values (failed configs)
+            valid_low = [m for m in self.evaluated_low if m.perf != float("inf")]
+            valid_medium = [m for m in self.evaluated_medium if m.perf != float("inf")]
             X_train = np.array(
-                [self.encoder.encode(m.flat_values) for m in self.evaluated_low]
-                + [self.encoder.encode(m.flat_values) for m in self.evaluated_medium]
+                [self.encoder.encode(m.flat_values) for m in valid_low]
+                + [self.encoder.encode(m.flat_values) for m in valid_medium]
             )
             y_train = np.array(
-                [m.perf for m in self.evaluated_low] + [m.perf for m in self.evaluated_medium]
+                [m.perf for m in valid_low] + [m.perf for m in valid_medium]
             )
         else:
             # Single-fidelity: Train only on low fidelity
-            X_train = np.array([self.encoder.encode(m.flat_values) for m in self.evaluated_low])
-            y_train = np.array([m.perf for m in self.evaluated_low])
+            # Filter out infinity values (failed configs)
+            valid_low = [m for m in self.evaluated_low if m.perf != float("inf")]
+            X_train = np.array([self.encoder.encode(m.flat_values) for m in valid_low])
+            y_train = np.array([m.perf for m in valid_low])
 
         # Train Random Forest
         rf = RandomForestRegressor(

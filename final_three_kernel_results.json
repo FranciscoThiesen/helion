@@ -1,0 +1,125 @@
+[
+  {
+    "kernel": "MatMul-1024",
+    "results": [
+      {
+        "algorithm": "DifferentialEvolution",
+        "time": 243.86144924163818,
+        "performance": 0.011392000131309032,
+        "evaluations": 1600
+      },
+      {
+        "algorithm": "GeneticAlgorithm",
+        "time": 349.30763602256775,
+        "performance": 0.010143999941647053,
+        "evaluations": 1598
+      },
+      {
+        "algorithm": "PSO",
+        "time": 370.41317486763,
+        "performance": 0.010784000158309937,
+        "evaluations": 1595
+      },
+      {
+        "algorithm": "TPE",
+        "time": 298.2658751010895,
+        "performance": 0.012959999963641167,
+        "evaluations": 1597
+      },
+      {
+        "algorithm": "DE-Surrogate",
+        "time": 330.49109411239624,
+        "performance": 0.009680000133812428,
+        "evaluations": 1573
+      },
+      {
+        "algorithm": "RandomForestMFBO",
+        "time": 155.31267261505127,
+        "performance": 0.015647999942302704,
+        "evaluations": 1600
+      }
+    ]
+  },
+  {
+    "kernel": "GELU-1M",
+    "results": [
+      {
+        "algorithm": "DifferentialEvolution",
+        "time": 471.592413187027,
+        "performance": 0.007104000076651573,
+        "evaluations": 1599
+      },
+      {
+        "algorithm": "GeneticAlgorithm",
+        "time": 302.1669428348541,
+        "performance": 0.006719999946653843,
+        "evaluations": 1598
+      },
+      {
+        "algorithm": "PSO",
+        "time": 360.7733142375946,
+        "performance": 0.00687999976798892,
+        "evaluations": 1594
+      },
+      {
+        "algorithm": "TPE",
+        "time": 351.86461210250854,
+        "performance": 0.006719999946653843,
+        "evaluations": 1599
+      },
+      {
+        "algorithm": "DE-Surrogate",
+        "time": 333.5884749889374,
+        "performance": 0.006719999946653843,
+        "evaluations": 1639
+      },
+      {
+        "algorithm": "RandomForestMFBO",
+        "time": 237.37856268882751,
+        "performance": 0.006783999968320131,
+        "evaluations": 1600
+      }
+    ]
+  },
+  {
+    "kernel": "FusedReLUAdd-1M",
+    "results": [
+      {
+        "algorithm": "DifferentialEvolution",
+        "time": 497.0455904006958,
+        "performance": 0.007615999784320593,
+        "evaluations": 1600
+      },
+      {
+        "algorithm": "GeneticAlgorithm",
+        "time": 422.6603376865387,
+        "performance": 0.007648000027984381,
+        "evaluations": 1595
+      },
+      {
+        "algorithm": "PSO",
+        "time": 322.45349764823914,
+        "performance": 0.0077760000713169575,
+        "evaluations": 1597
+      },
+      {
+        "algorithm": "TPE",
+        "time": 432.01943922042847,
+        "performance": 0.0077760000713169575,
+        "evaluations": 1600
+      },
+      {
+        "algorithm": "DE-Surrogate",
+        "time": 345.5448796749115,
+        "performance": 0.007679999805986881,
+        "evaluations": 1640
+      },
+      {
+        "algorithm": "RandomForestMFBO",
+        "time": 240.61044454574585,
+        "performance": 0.007679999805986881,
+        "evaluations": 1600
+      }
+    ]
+  }
+]
