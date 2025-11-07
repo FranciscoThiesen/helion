@@ -23,6 +23,36 @@ def parse_csv_convergence(csv_path):
 
     return evals, perfs
 
+
+def find_convergence_point(perfs, patience=100, threshold=0.001):
+    """Find where performance stopped improving significantly.
+
+    Args:
+        perfs: List of best performance values over time
+        patience: Number of evaluations without improvement to consider converged
+        threshold: Relative improvement threshold (0.001 = 0.1%)
+
+    Returns:
+        Index where convergence occurred
+    """
+    if len(perfs) < patience:
+        return len(perfs)
+
+    for i in range(len(perfs) - patience):
+        current_best = perfs[i]
+        future_best = min(perfs[i:i+patience])
+
+        # Check if improvement is less than threshold
+        if current_best == 0:
+            improvement = 0
+        else:
+            improvement = (current_best - future_best) / current_best
+
+        if improvement < threshold:
+            return i + int(patience * 0.5)  # Return midpoint for better visualization
+
+    return len(perfs)
+
 def plot_convergence(kernel_name):
     """Generate convergence plot for a kernel."""
     plt.figure(figsize=(10, 6))
@@ -34,7 +64,7 @@ def plot_convergence(kernel_name):
     }
 
     log_dir = Path('convergence_logs')
-    all_max_evals = []
+    convergence_points = []
 
     for algo in ['DifferentialEvolution', 'DE-Surrogate', 'PatternSearch']:
         csv_path = log_dir / f"{kernel_name}_{algo}.csv"
@@ -46,14 +76,18 @@ def plot_convergence(kernel_name):
         evals, perfs = parse_csv_convergence(csv_path)
 
         if evals and perfs:
-            all_max_evals.append(max(evals))
-            plt.plot(evals, perfs, label=algo, color=colors.get(algo, 'gray'), linewidth=2)
-            print(f"  Added {algo}: {len(evals)} evals, best={min(perfs):.4f}ms")
+            # Find where this algorithm converged
+            conv_idx = find_convergence_point(perfs)
+            convergence_points.append(conv_idx)
 
-    # Set X-axis to show all data with some padding
-    if all_max_evals:
-        max_x = max(all_max_evals)
-        plt.xlim(0, max_x * 1.05)
+            plt.plot(evals, perfs, label=algo, color=colors.get(algo, 'gray'), linewidth=2)
+            print(f"  Added {algo}: {len(evals)} evals, best={min(perfs):.4f}ms, converged at ~{conv_idx}")
+
+    # Set X-axis to where the last algorithm converged (with 10% margin)
+    if convergence_points:
+        max_convergence = max(convergence_points)
+        plt.xlim(0, max_convergence * 1.1)
+        print(f"  X-axis limited to {int(max_convergence * 1.1)} (last convergence at {max_convergence})")
 
     plt.xlabel('Number of Evaluations', fontsize=12)
     plt.ylabel('Best Performance (ms)', fontsize=12)
