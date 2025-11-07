@@ -1,0 +1,128 @@
+{
+  "MatMul-1024": {
+    "DifferentialEvolution": {
+      "initial_perf": 0.0182,
+      "final_perf": 0.0114,
+      "improvement_pct": 37.362637362637365,
+      "total_evals": 1600,
+      "convergence_points": {
+        "90%": [
+          320,
+          0.0126
+        ],
+        "95%": [
+          600,
+          0.0117
+        ],
+        "99%": [
+          720,
+          0.0112
+        ]
+      }
+    },
+    "DE-Surrogate": {
+      "initial_perf": 0.0178,
+      "final_perf": 0.0097,
+      "improvement_pct": 45.50561797752809,
+      "total_evals": 1573,
+      "convergence_points": {
+        "90%": [
+          230,
+          0.0101
+        ],
+        "95%": [
+          230,
+          0.0101
+        ],
+        "99%": [
+          774,
+          0.0097
+        ]
+      }
+    }
+  },
+  "GELU-1M": {
+    "DifferentialEvolution": {
+      "initial_perf": 0.0069,
+      "final_perf": 0.0067,
+      "improvement_pct": 2.8985507246376763,
+      "total_evals": 1600,
+      "convergence_points": {
+        "90%": [
+          80,
+          0.0069
+        ],
+        "95%": [
+          80,
+          0.0069
+        ],
+        "99%": [
+          280,
+          0.0067
+        ]
+      }
+    },
+    "DE-Surrogate": {
+      "initial_perf": 0.0068,
+      "final_perf": 0.0067,
+      "improvement_pct": 1.4705882352941089,
+      "total_evals": 1639,
+      "convergence_points": {
+        "90%": [
+          119,
+          0.0068
+        ],
+        "95%": [
+          119,
+          0.0068
+        ],
+        "99%": [
+          919,
+          0.0067
+        ]
+      }
+    }
+  },
+  "FusedReLUAdd-1M": {
+    "DifferentialEvolution": {
+      "initial_perf": 0.0079,
+      "final_perf": 0.0076,
+      "improvement_pct": 3.7974683544303898,
+      "total_evals": 1600,
+      "convergence_points": {
+        "90%": [
+          80,
+          0.0079
+        ],
+        "95%": [
+          80,
+          0.0079
+        ],
+        "99%": [
+          120,
+          0.0076
+        ]
+      }
+    },
+    "DE-Surrogate": {
+      "initial_perf": 0.0079,
+      "final_perf": 0.0077,
+      "improvement_pct": 2.5316455696202596,
+      "total_evals": 1640,
+      "convergence_points": {
+        "90%": [
+          120,
+          0.0079
+        ],
+        "95%": [
+          120,
+          0.0079
+        ],
+        "99%": [
+          360,
+          0.0077
+        ]
+      }
+    }
+  }
+}
