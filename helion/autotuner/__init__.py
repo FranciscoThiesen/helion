@@ -46,3 +46,8 @@ search_algorithms = {
     "RandomSearch": RandomSearch,
     "TPESearch": TreeStructuredParzenEstimator,
 }
+
+cache_classes = {
+    "LocalAutotuneCache": LocalAutotuneCache,
+    "StrictLocalAutotuneCache": StrictLocalAutotuneCache,
+}
